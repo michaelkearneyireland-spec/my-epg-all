@@ -1,0 +1,89 @@
+name: Update EPG
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # every day at 03:00 UTC
+  workflow_dispatch:       # adds a "Run workflow" button
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: epg
+  cancel-in-progress: false
+
+env:
+  PLAYLIST_URL: https://iptv-org.github.io/iptv/index.m3u   # the playlist to follow
+  PARALLEL: 80                                              # streams tested at once
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Download the iptv-org grabber
+        run: git clone --depth 1 -b master https://github.com/iptv-org/epg.git epg
+
+      - name: Download iptv-org channel time zones
+        run: curl -fsSL -o feeds.csv https://raw.githubusercontent.com/iptv-org/database/master/data/feeds.csv
+
+      - name: Download today's playlist
+        run: curl -fsSL -o source.m3u "$PLAYLIST_URL"
+
+      - name: Build your playlist (minus exclude.txt)
+        run: |
+          mkdir -p public
+          node filter-playlist.js source.m3u filtered.m3u \
+            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/guide.xml.gz"
+
+      - name: Remove dead streams
+        run: node check-streams.js filtered.m3u public/playlist.m3u public/dead-channels.txt
+
+      - name: Get last night's channel list (keeps each channel's source stable)
+        run: curl -fsSL -o channels.previous.xml "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/channels.xml" || true
+
+      - name: Build the channel list from your playlist
+        run: node build-channels.js epg feeds.csv channels.generated.xml public/playlist.m3u channels.previous.xml
+
+      - name: Install
+        working-directory: epg
+        run: npm install
+
+      - name: Grab listings
+        working-directory: epg
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/public"
+          npm run grab --- \
+            --channels="$GITHUB_WORKSPACE/channels.generated.xml" \
+            --output="$GITHUB_WORKSPACE/public/guide.xml" \
+            --gzip="$GITHUB_WORKSPACE/public/guide.xml.gz" \
+            --days=3 \
+            --maxConnections=10
+
+      - name: Add a simple index page
+        run: |
+          cp channels.generated.xml public/channels.xml
+          echo '<!doctype html><title>EPG</title><p><a href="guide.xml">guide.xml</a> | <a href="guide.xml.gz">guide.xml.gz</a> | <a href="playlist.m3u">playlist.m3u</a> | <a href="dead-channels.txt">removed as dead</a> | <a href="channels.xml">channel list used</a></p>' > public/index.html
+          ls -lh public
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
