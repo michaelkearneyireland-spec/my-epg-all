@@ -17,6 +17,8 @@ concurrency:
 env:
   PLAYLIST_URL: https://iptv-org.github.io/iptv/index.m3u   # the playlist to follow
   PARALLEL: 80                                              # streams tested at once
+  GROUP_BY: country                                         # sort and group by country (delete this line to keep iptv-org's order)
+  FIRST_COUNTRIES: Ireland,United Kingdom                   # shown first, then the rest A-Z
 
 jobs:
   build:
@@ -87,3 +89,4 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
